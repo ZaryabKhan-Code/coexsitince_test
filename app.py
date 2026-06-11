@@ -36,6 +36,13 @@ def exchange_token():
     waba_id = body.get("waba_id")
     phone_number_id = body.get("phone_number_id")
 
+    print("EXCHANGE REQUEST:", json.dumps({
+        "code_len": len(code) if code else 0,
+        "redirect_uri": redirect_uri,
+        "waba_id": waba_id,
+        "phone_number_id": phone_number_id,
+    }))
+
     if not code:
         return jsonify({"error": "missing code"}), 400
 
@@ -49,6 +56,8 @@ def exchange_token():
         },
         timeout=15,
     )
+    print("EXCHANGE RESPONSE STATUS:", token_res.status_code)
+    print("EXCHANGE RESPONSE BODY:", token_res.text)
     if token_res.status_code != 200:
         return jsonify({"error": "token exchange failed", "detail": token_res.json()}), 400
 
