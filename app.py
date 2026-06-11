@@ -32,6 +32,7 @@ def exchange_token():
     We swap it for a business-scoped access token and subscribe our app to the WABA."""
     body = request.get_json(force=True)
     code = body.get("code")
+    redirect_uri = body.get("redirect_uri", "")
     waba_id = body.get("waba_id")
     phone_number_id = body.get("phone_number_id")
 
@@ -44,6 +45,7 @@ def exchange_token():
             "client_id": APP_ID,
             "client_secret": APP_SECRET,
             "code": code,
+            "redirect_uri": redirect_uri,
         },
         timeout=15,
     )

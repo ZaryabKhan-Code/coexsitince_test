@@ -58,6 +58,7 @@
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
               code: response.authResponse.code,
+              redirect_uri: window.location.origin + window.location.pathname,
               waba_id: signupData.waba_id,
               phone_number_id: signupData.phone_number_id,
             })
