@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import hmac
 import json
 import os
 
@@ -21,6 +24,26 @@ app = Flask(__name__)
 CONNECTIONS = {}
 
 
+def _b64url_decode(s):
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def parse_signed_request(signed_request, app_secret):
+    """Decode FB signed_request and verify HMAC. Returns payload dict or None."""
+    try:
+        encoded_sig, payload = signed_request.split(".", 1)
+        sig = _b64url_decode(encoded_sig)
+        data = json.loads(_b64url_decode(payload))
+        expected = hmac.new(app_secret.encode(), payload.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(sig, expected):
+            print("signed_request signature mismatch")
+            return None
+        return data
+    except Exception as exc:
+        print("signed_request parse error:", exc)
+        return None
+
+
 @app.get("/")
 def index():
     return render_template("index.html", app_id=APP_ID, config_id=CONFIG_ID, graph_version=GRAPH_VERSION)
@@ -31,54 +54,92 @@ def exchange_token():
     """Frontend posts the short-lived `code` from the Embedded Signup popup.
     We swap it for a business-scoped access token and subscribe our app to the WABA."""
     body = request.get_json(force=True)
-    code = body.get("code")
-    redirect_uri = body.get("redirect_uri", "")
-    waba_id = body.get("waba_id")
-    phone_number_id = body.get("phone_number_id")
+    auth = body.get("authResponse") or {}
+    code = body.get("code") or auth.get("code")
+    signed_request = auth.get("signedRequest")
+    fallback_token = auth.get("accessToken")
+    waba_id = body.get("waba_id") or (body.get("signupData") or {}).get("waba_id")
+    phone_number_id = body.get("phone_number_id") or (body.get("signupData") or {}).get("phone_number_id")
 
-    print("EXCHANGE REQUEST:", json.dumps({
-        "code_len": len(code) if code else 0,
-        "redirect_uri": redirect_uri,
+    # If FB didn't return a top-level code, dig it out of signed_request.
+    if not code and signed_request:
+        parsed = parse_signed_request(signed_request, APP_SECRET)
+        if parsed:
+            code = parsed.get("code")
+
+    print("EXCHANGE INPUTS:", json.dumps({
+        "has_code": bool(code),
+        "has_signed_request": bool(signed_request),
+        "has_fallback_token": bool(fallback_token),
         "waba_id": waba_id,
         "phone_number_id": phone_number_id,
     }))
 
-    if not code:
-        return jsonify({"error": "missing code"}), 400
+    access_token = None
 
-    token_res = requests.get(
-        f"{GRAPH}/oauth/access_token",
-        params={
-            "client_id": APP_ID,
-            "client_secret": APP_SECRET,
-            "code": code,
-            "redirect_uri": redirect_uri,
-        },
-        timeout=15,
-    )
-    print("EXCHANGE RESPONSE STATUS:", token_res.status_code)
-    print("EXCHANGE RESPONSE BODY:", token_res.text)
-    if token_res.status_code != 200:
-        return jsonify({"error": "token exchange failed", "detail": token_res.json()}), 400
+    if code:
+        token_res = requests.get(
+            f"{GRAPH}/oauth/access_token",
+            params={
+                "client_id": APP_ID,
+                "client_secret": APP_SECRET,
+                "code": code,
+            },
+            timeout=15,
+        )
+        print("EXCHANGE STATUS:", token_res.status_code, "BODY:", token_res.text)
+        if token_res.status_code == 200:
+            access_token = token_res.json().get("access_token")
 
-    access_token = token_res.json()["access_token"]
+    # Fallback: use the user access token FB.login returned directly.
+    if not access_token and fallback_token:
+        print("Using fallback accessToken from FB.login response")
+        access_token = fallback_token
 
-    # Subscribe our app to receive webhooks for this WABA.
+    if not access_token:
+        return jsonify({"error": "could not obtain access token"}), 400
+
+    # If frontend didn't capture waba_id, discover it from Graph API.
+    if not waba_id:
+        biz_res = requests.get(
+            f"{GRAPH}/me/businesses",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"fields": "id,name,owned_whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name}}"},
+            timeout=15,
+        )
+        print("BUSINESSES LOOKUP:", biz_res.status_code, biz_res.text)
+        try:
+            for biz in biz_res.json().get("data", []):
+                wabas = (biz.get("owned_whatsapp_business_accounts") or {}).get("data", [])
+                if wabas:
+                    waba_id = wabas[0]["id"]
+                    phones = (wabas[0].get("phone_numbers") or {}).get("data", [])
+                    if phones and not phone_number_id:
+                        phone_number_id = phones[0]["id"]
+                    break
+        except Exception as exc:
+            print("WABA discovery failed:", exc)
+
     if waba_id:
         sub = requests.post(
             f"{GRAPH}/{waba_id}/subscribed_apps",
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=15,
         )
-        if sub.status_code >= 400:
-            return jsonify({"error": "subscribe_apps failed", "detail": sub.json()}), 400
+        print("SUBSCRIBE STATUS:", sub.status_code, "BODY:", sub.text)
 
-    CONNECTIONS[phone_number_id] = {
+    if phone_number_id:
+        CONNECTIONS[phone_number_id] = {
+            "waba_id": waba_id,
+            "access_token": access_token,
+        }
+
+    return jsonify({
+        "ok": True,
+        "phone_number_id": phone_number_id,
         "waba_id": waba_id,
-        "access_token": access_token,
-    }
-
-    return jsonify({"ok": True, "phone_number_id": phone_number_id, "waba_id": waba_id})
+        "token_preview": (access_token[:25] + "...") if access_token else None,
+    })
 
 
 @app.get("/webhook")

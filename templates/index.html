@@ -51,16 +51,14 @@
     document.getElementById("connect").onclick = function() {
       FB.login(function(response) {
         const out = document.getElementById("out");
-        if (response.authResponse && response.authResponse.code) {
-          out.textContent = "Got code, exchanging...";
+        if (response.authResponse) {
+          out.textContent = "Got auth response, exchanging...";
           fetch("/api/exchange-token", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
-              code: response.authResponse.code,
-              redirect_uri: window.location.origin + window.location.pathname,
-              waba_id: signupData.waba_id,
-              phone_number_id: signupData.phone_number_id,
+              authResponse: response.authResponse,
+              signupData: signupData,
             })
           }).then(r => r.json()).then(j => {
             out.textContent = JSON.stringify(j, null, 2);
@@ -72,7 +70,7 @@
         config_id: "{{ config_id }}",
         response_type: "code",
         override_default_response_type: true,
-        extras: { setup: {}, featureType: "whatsapp_business_app_onboarding" }
+        extras: { setup: {} }
       });
     };
   </script>
