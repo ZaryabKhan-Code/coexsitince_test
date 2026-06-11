@@ -142,6 +142,19 @@ def exchange_token():
     })
 
 
+@app.post("/api/manual-connect")
+def manual_connect():
+    """Manually register a phone_number_id + access_token from API Setup tab.
+    Lets you test sending/receiving without going through Embedded Signup."""
+    body = request.get_json(force=True)
+    pnid = body["phone_number_id"]
+    CONNECTIONS[pnid] = {
+        "waba_id": body.get("waba_id"),
+        "access_token": body["access_token"],
+    }
+    return jsonify({"ok": True, "registered": pnid})
+
+
 @app.get("/webhook")
 def webhook_verify():
     mode = request.args.get("hub.mode")
