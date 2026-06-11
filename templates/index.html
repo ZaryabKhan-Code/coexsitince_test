@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Connect WhatsApp</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 560px; margin: 60px auto; padding: 0 16px; }
+    button { background: #25D366; color: white; border: 0; padding: 14px 22px; font-size: 16px; border-radius: 8px; cursor: pointer; }
+    pre { background: #f4f4f4; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>Connect your WhatsApp</h1>
+  <p>Click the button. A Meta popup will open and walk you through linking your WhatsApp Business number. You'll be asked to scan a QR from your WhatsApp Business app (Settings &rarr; Linked Devices).</p>
+
+  <button id="connect">Connect WhatsApp</button>
+
+  <h3>Result</h3>
+  <pre id="out">(nothing yet)</pre>
+
+  <script>
+    window.fbAsyncInit = function() {
+      FB.init({
+        appId: "{{ app_id }}",
+        cookie: true,
+        xfbml: true,
+        version: "{{ graph_version }}"
+      });
+    };
+    (function(d, s, id){
+      var js, fjs = d.getElementsByTagName(s)[0];
+      if (d.getElementById(id)) return;
+      js = d.createElement(s); js.id = id;
+      js.src = "https://connect.facebook.net/en_US/sdk.js";
+      fjs.parentNode.insertBefore(js, fjs);
+    }(document, "script", "facebook-jssdk"));
+
+    // Meta posts events into the parent window during Embedded Signup.
+    // We capture phone_number_id + waba_id from it.
+    let signupData = {};
+    window.addEventListener("message", (event) => {
+      if (!event.origin.endsWith("facebook.com")) return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === "WA_EMBEDDED_SIGNUP" && data.event === "FINISH") {
+          signupData = data.data || {};
+        }
+      } catch (_) {}
+    });
+
+    document.getElementById("connect").onclick = function() {
+      FB.login(function(response) {
+        const out = document.getElementById("out");
+        if (response.authResponse && response.authResponse.code) {
+          out.textContent = "Got code, exchanging...";
+          fetch("/api/exchange-token", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              code: response.authResponse.code,
+              waba_id: signupData.waba_id,
+              phone_number_id: signupData.phone_number_id,
+            })
+          }).then(r => r.json()).then(j => {
+            out.textContent = JSON.stringify(j, null, 2);
+          });
+        } else {
+          out.textContent = "Cancelled or failed: " + JSON.stringify(response, null, 2);
+        }
+      }, {
+        config_id: "{{ config_id }}",
+        response_type: "code",
+        override_default_response_type: true,
+        extras: { setup: {}, featureType: "whatsapp_business_app_onboarding" }
+      });
+    };
+  </script>
+</body>
+</html>
